@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "api/crawler.rs", "use": "@vercel/rust" },
+    { "src": "api/search.js", "use": "@vercel/node" },
+    { "src": "index.html", "use": "@vercel/static" },
+    { "src": "app.js", "use": "@vercel/static" },
+    { "src": "styles.css", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/api/search", "dest": "/api/search.js" },
+    { "src": "/api/crawler", "dest": "/api/crawler.rs" },
+    { "src": "/(.*)", "dest": "/$1" }
+  ]
+}
