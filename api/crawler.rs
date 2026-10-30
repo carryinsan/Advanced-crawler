@@ -984,7 +984,7 @@ fn parse_tag_name(token: &[u8]) -> (String, bool, bool) {
         index += 1;
     }
     let name = String::from_utf8_lossy(&token[start..index]).to_ascii_lowercase();
-    let self_closing = token[..token.len().saturating_sub(1)].iter().rev().find(|byte| !byte.is_ascii_whitespace()).is_some_and(|byte| **byte == b'/');
+    let self_closing = token[..token.len().saturating_sub(1)].iter().rev().find(|byte| !byte.is_ascii_whitespace()).is_some_and(|byte| *byte == b'/');
     (name, closing, self_closing)
 }
 
