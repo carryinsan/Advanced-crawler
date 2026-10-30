@@ -1,0 +1,10 @@
+{
+  "name": "arixai-web-intelligence",
+  "private": true,
+  "type": "module",
+  "version": "4.0.0",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check:search": "node --check api/search.js"
+  }
+}
