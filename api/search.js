@@ -2093,8 +2093,7 @@ function streamJsonSearch(input) {
         };
 
       logger.add('request-start', `Starting live search for ${query}.`, { count, mode });
-      send(`{"ok":true,"version":${encode(VERSION)},"query":${encode(query)},"requestedResults":${count},"mod
-e":${encode(mode)},"streaming":true,"results":[\n` + ' '.repeat(2048) + '\n');
+      send(`{"ok":true,"version":${encode(VERSION)},"query":${encode(query)},"requestedResults":${count},"mode":${encode(mode)},"streaming":true,"results":[\n` + ' '.repeat(2048) + '\n');
       const heartbeat = setInterval(() => send(' \n'), 600);
       Promise.resolve()
         .then(() => performSearch(input, started, logger))
