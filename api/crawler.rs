@@ -16,6 +16,9 @@ use tokio::{net::lookup_host, sync::Semaphore, time::timeout};
 use url::Url;
 use vercel_runtime::{run, service_fn, Error, Request, Response, ResponseBody};
 
+mod llm_format;
+use llm_format::{format_context, CompressionStats};
+
 const MAX_REDIRECTS: usize = 8;
 const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
 const MAX_INPUT_BYTES: usize = 128 * 1024;
@@ -26,9 +29,10 @@ const GLOBAL_CONCURRENCY: usize = 64;
 const CLIENT_POOL_CAPACITY: usize = 128;
 const FETCH_TIMEOUT_SECS: u64 = 10;
 const CONNECT_TIMEOUT_SECS: u64 = 3;
+
 const MAX_JSON_TEXT_BYTES: usize = 120 * 1024;
 const MAX_TAG_BUFFER_BYTES: usize = 64 * 1024;
-const USER_AGENT: &str = "ArixAI-WebIntelligence/4.0";
+const USER_AGENT: &str = "ArixAI-WebIntelligence/4.1";
 
 static GLOBAL_GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 static CLIENT_POOL: OnceLock<Mutex<ClientPool>> = OnceLock::new();
@@ -57,6 +61,8 @@ struct CrawlResponse {
     text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ai_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compression: Option<CompressionStats>,
     word_count: usize,
     character_count: usize,
     source_html_bytes: usize,
@@ -102,6 +108,7 @@ struct BatchResponse {
 struct SchedulerInfo {
     requested: usize,
     max_urls_per_request: usize,
+
     concurrency_ceiling: usize,
     strategy: &'static str,
 }
@@ -178,82 +185,84 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
             .status(http::StatusCode::NO_CONTENT)
             .header("access-control-allow-origin", "*")
             .header("access-control-allow-methods", "POST, OPTIONS")
-            .header("access-control-allow-headers", "content-type, authorization, x-arix-crawler-token")
-            .header("cache-control", "no-store")
-            .body(ResponseBody::from(Vec::new()))?);
-    }
 
-    if req.method() != http::Method::POST {
-        return json_response(405, &serde_json::json!({
-            "ok": false,
-            "error": {"code": "METHOD_NOT_ALLOWED"}
-        }));
-    }
+        .header("access-control-allow-headers", "content-type, authorization, x-arix-crawler-token")
+        .header("cache-control", "no-store")
+        .body(ResponseBody::from(Vec::new()))?);
+}
 
-    if !request_authorized(&req) {
-        return json_response(401, &serde_json::json!({
-            "ok": false,
-            "error": {"code": "UNAUTHORIZED", "message": "Crawler API token is missing or invalid"}
-        }));
-    }
+if req.method() != http::Method::POST {
+    return json_response(405, &serde_json::json!({
+         "ok": false,
+         "error": {"code": "METHOD_NOT_ALLOWED"}
+    }));
+}
 
-    let started = Instant::now();
-    let body = match req.into_body().collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(_) => {
-            return json_response(400, &serde_json::json!({
-                "ok": false,
-                "error": {"code": "INVALID_BODY", "message": "Could not read request body"}
-            }));
-        }
-    };
+if !request_authorized(&req) {
+    return json_response(401, &serde_json::json!({
+         "ok": false,
+         "error": {"code": "UNAUTHORIZED", "message": "Crawler API token is missing or invalid"}
+    }));
+}
 
-    if body.len() > MAX_INPUT_BYTES {
-        return json_response(413, &serde_json::json!({
-            "ok": false,
-            "error": {"code": "REQUEST_TOO_LARGE", "message": "Request body is too large"}
-        }));
-    }
-
-    let input: CrawlRequest = match serde_json::from_slice(&body) {
-        Ok(value) => value,
-        Err(_) => {
-            return json_response(400, &serde_json::json!({
-                "ok": false,
-                "error": {
-                    "code": "INVALID_JSON",
-                    "message": "Send JSON: { url: string } or { urls: string[] }"
-                }
-            }));
-        }
-    };
-
-    let mut supplied_urls = Vec::new();
-    for entry in input.urls.unwrap_or_default() {
-        split_url_field(&entry, &mut supplied_urls);
-    }
-    if let Some(url) = input.url {
-        split_url_field(&url, &mut supplied_urls);
-    }
-
-    let mut urls = Vec::with_capacity(supplied_urls.len().min(MAX_URLS_PER_REQUEST));
-    let mut seen = HashSet::new();
-    for raw in supplied_urls {
-        let value = raw.trim().to_string();
-        if !value.is_empty() && value.len() <= MAX_URL_LEN && seen.insert(value.clone()) {
-            urls.push(value);
-        }
-    }
-
-    if urls.is_empty() {
+let started = Instant::now();
+let body = match req.into_body().collect().await {
+    Ok(collected) => collected.to_bytes(),
+    Err(_) => {
         return json_response(400, &serde_json::json!({
-            "ok": false,
-            "error": {"code": "NO_URLS", "message": "Provide at least one HTTP(S) URL"}
+             "ok": false,
+             "error": {"code": "INVALID_BODY", "message": "Could not read request body"}
         }));
     }
-    if urls.len() > MAX_URLS_PER_REQUEST {
-        return json_response(413, &serde_json::json!({
-            "ok": false,
+};
+
+if body.len() > MAX_INPUT_BYTES {
+    return json_response(413, &serde_json::json!({
+         "ok": false,
+         "error": {"code": "REQUEST_TOO_LARGE", "message": "Request body is too large"}
+    }));
+}
+
+let input: CrawlRequest = match serde_json::from_slice(&body) {
+    Ok(value) => value,
+    Err(_) => {
+        return json_response(400, &serde_json::json!({
+             "ok": false,
+             "error": {
+                 "code": "INVALID_JSON",
+                 "message": "Send JSON: { url: string } or { urls: string[] }"
+             }
+        }));
+    }
+};
+
+let mut supplied_urls = Vec::new();
+for entry in input.urls.unwrap_or_default() {
+    split_url_field(&entry, &mut supplied_urls);
+}
+if let Some(url) = input.url {
+    split_url_field(&url, &mut supplied_urls);
+}
+
+let mut urls = Vec::with_capacity(supplied_urls.len().min(MAX_URLS_PER_REQUEST));
+let mut seen = HashSet::new();
+for raw in supplied_urls {
+    let value = raw.trim().to_string();
+    if !value.is_empty() && value.len() <= MAX_URL_LEN && seen.insert(value.clone()) {
+        urls.push(value);
+    }
+}
+
+if urls.is_empty() {
+    return json_response(400, &serde_json::json!({
+         "ok": false,
+         "error": {"code": "NO_URLS", "message": "Provide at least one HTTP(S) URL"}
+    }));
+}
+if urls.len() > MAX_URLS_PER_REQUEST {
+    return json_response(413, &serde_json::json!({
+         "ok": false,
+
             "error": {
                 "code": "TOO_MANY_URLS",
                 "message": format!("Maximum {} URLs per request", MAX_URLS_PER_REQUEST)
@@ -275,7 +284,8 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
             let _permit = match gate.acquire_owned().await {
                 Ok(permit) => permit,
                 Err(_) => {
-                    return failed_response(url, "CRAWLER_SHUTDOWN", "Crawler scheduler is unavailable", false);
+                     return failed_response(url, "CRAWLER_SHUTDOWN", "Crawler scheduler is unavailable",
+false);
                 }
             };
             crawl_one(&url, max_text, include_ai_context).await
@@ -298,18 +308,18 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
     json_response(
         200,
         &BatchResponse {
-            ok: failed == 0,
-            count: results.len(),
-            succeeded,
-            failed,
-            latency_ms: started.elapsed().as_millis(),
-            scheduler: SchedulerInfo {
-                requested,
-                max_urls_per_request: MAX_URLS_PER_REQUEST,
-                concurrency_ceiling: GLOBAL_CONCURRENCY,
-                strategy: "global bounded concurrency with per-host pooled clients and isolated results",
-            },
-            results,
+             ok: failed == 0,
+             count: results.len(),
+             succeeded,
+             failed,
+             latency_ms: started.elapsed().as_millis(),
+             scheduler: SchedulerInfo {
+                 requested,
+                 max_urls_per_request: MAX_URLS_PER_REQUEST,
+                 concurrency_ceiling: GLOBAL_CONCURRENCY,
+                 strategy: "global bounded concurrency with per-host pooled clients and isolated results",
+             },
+             results,
         },
     )
 }
@@ -329,6 +339,7 @@ fn request_authorized(req: &Request) -> bool {
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     let mut difference = left.len() ^ right.len();
+
     let max_len = left.len().max(right.len());
     for index in 0..max_len {
         let a = left.get(index).copied().unwrap_or(0);
@@ -344,7 +355,8 @@ async fn crawl_one(raw: &str, max_text: Option<usize>, include_ai_context: bool)
         Ok(mut response) => {
             response.latency_ms = started.elapsed().as_millis();
             eprintln!(
-                "{{\"event\":\"page_complete\",\"url\":{},\"ok\":true,\"latency_ms\":{},\"quality\":{},\"words\":{},\"source_bytes\":{}}}",
+                "{{\"event\":\"page_complete\",\"url\":{},\"ok\":true,\"latency_ms\":{},\"quality\":{},\"word
+s\":{},\"source_bytes\":{}}}",
                 serde_json::to_string(raw).unwrap_or_else(|_| "\"?\"".into()),
                 response.latency_ms,
                 response.quality,
@@ -356,7 +368,8 @@ async fn crawl_one(raw: &str, max_text: Option<usize>, include_ai_context: bool)
         Err(error) => {
             let retryable = is_retryable_error(&error);
             let message = safe_error(&error);
-            failed_response_with_latency(raw.to_string(), "CRAWL_FAILED", &message, retryable, started.elapsed().as_millis())
+            failed_response_with_latency(raw.to_string(), "CRAWL_FAILED", &message, retryable,
+started.elapsed().as_millis())
         }
     }
 }
@@ -382,6 +395,7 @@ fn failed_response_with_latency(
         content_type: None,
         text: None,
         ai_context: None,
+        compression: None,
         word_count: 0,
         character_count: 0,
         source_html_bytes: 0,
@@ -391,9 +405,9 @@ fn failed_response_with_latency(
         stages: Stages::default(),
         warnings: Vec::new(),
         error: Some(Failure {
-            code: code.into(),
-            message: message.into(),
-            retryable,
+             code: code.into(),
+             message: message.into(),
+             retryable,
         }),
     }
 }
@@ -403,13 +417,14 @@ fn json_response<T: Serialize>(status: u16, value: &T) -> Result<Response<Respon
     let bytes = serde_json::to_vec(value)?;
     Ok(Response::builder()
         .status(status)
-        .header("access-control-allow-origin", "*")
-        .header("access-control-allow-methods", "POST, OPTIONS")
-        .header("access-control-allow-headers", "content-type, authorization, x-arix-crawler-token")
-        .header("content-type", "application/json; charset=utf-8")
-        .header("cache-control", "no-store")
-        .header("x-content-type-options", "nosniff")
-        .body(ResponseBody::from(bytes))?)
+
+       .header("access-control-allow-origin", "*")
+       .header("access-control-allow-methods", "POST, OPTIONS")
+       .header("access-control-allow-headers", "content-type, authorization, x-arix-crawler-token")
+       .header("content-type", "application/json; charset=utf-8")
+       .header("cache-control", "no-store")
+       .header("x-content-type-options", "nosniff")
+       .body(ResponseBody::from(bytes))?)
 }
 
 async fn crawl(raw: &str, max_text: Option<usize>, include_ai_context: bool) -> Result<CrawlResponse> {
@@ -480,35 +495,36 @@ async fn crawl(raw: &str, max_text: Option<usize>, include_ai_context: bool) -> 
     let mut truncated = false;
     let mut body_stream = fetched.response.bytes_stream();
 
-    while let Some(chunk) = body_stream.next().await {
-        let chunk = chunk.context("BODY_READ_FAILED")?;
-        let remaining = MAX_HTML_BYTES.saturating_sub(source_bytes);
-        if remaining == 0 {
-            truncated = true;
-            break;
-        }
-        let take = chunk.len().min(remaining);
-        sanitizer.push(&chunk[..take]);
-        source_bytes = source_bytes.saturating_add(take);
-        if take < chunk.len() || source_bytes >= MAX_HTML_BYTES {
-            truncated = true;
-            break;
-        }
-    }
-    sanitizer.finish();
-    stages.read_ms = read.elapsed().as_millis();
-    if truncated {
-        warnings.push("source_html_early_bailout_at_2mb".into());
-    }
+   while let Some(chunk) = body_stream.next().await {
+       let chunk = chunk.context("BODY_READ_FAILED")?;
+       let remaining = MAX_HTML_BYTES.saturating_sub(source_bytes);
+       if remaining == 0 {
+           truncated = true;
+           break;
+       }
+       let take = chunk.len().min(remaining);
+       sanitizer.push(&chunk[..take]);
+       source_bytes = source_bytes.saturating_add(take);
+       if take < chunk.len() || source_bytes >= MAX_HTML_BYTES {
+           truncated = true;
+           break;
+       }
+   }
+   sanitizer.finish();
+   stages.read_ms = read.elapsed().as_millis();
+   if truncated {
+       warnings.push("source_html_early_bailout_at_2mb".into());
+   }
 
-    let clean_bytes = sanitizer.into_output();
-    let parse = Instant::now();
-    let html = String::from_utf8_lossy(&clean_bytes).into_owned();
-    let document = Html::parse_document(&html);
-    stages.parse_ms = parse.elapsed().as_millis();
+   let clean_bytes = sanitizer.into_output();
+   let parse = Instant::now();
+   let html = String::from_utf8_lossy(&clean_bytes).into_owned();
+   let document = Html::parse_document(&html);
+   stages.parse_ms = parse.elapsed().as_millis();
 
     let extract = Instant::now();
-    let (title, description, language, mut text, stats, extraction_warnings) = extract_full_document(&document);
+    let (title, description, language, mut text, stats, extraction_warnings) =
+extract_full_document(&document);
     let structured_text = extract_structured_json_text(&document);
     let structured_added = !structured_text.is_empty()
         && (text.split_whitespace().count() < 100 || text.len() < structured_text.len() / 2);
@@ -522,38 +538,39 @@ async fn crawl(raw: &str, max_text: Option<usize>, include_ai_context: bool) -> 
         warnings.push("content_is_from_public_wayback_snapshot".into());
     }
 
-    if let Some(cap) = max_text {
-        let cap = cap.clamp(1000, 500_000);
-        if text.len() > cap {
-            text = truncate_utf8_safely(&text, cap);
-            warnings.push("explicit_max_text_cap_applied".into());
-        }
-    }
+   if let Some(cap) = max_text {
+       let cap = cap.clamp(1000, 500_000);
+       if text.len() > cap {
+           text = truncate_utf8_safely(&text, cap);
+           warnings.push("explicit_max_text_cap_applied".into());
+       }
+   }
 
-    let audit = Instant::now();
-    let words = text.split_whitespace().count();
-    let lower = text.to_ascii_lowercase();
-    let mut quality = quality_score(words, &stats, text.len());
+   let audit = Instant::now();
+   let words = text.split_whitespace().count();
+   let lower = text.to_ascii_lowercase();
+   let mut quality = quality_score(words, &stats, text.len());
 
-    if structured_added && words >= 40 {
-        quality = quality.max(62);
-    }
-    if words < 30 {
-        quality = quality.min(35);
-        warnings.push("very_little_meaningful_text".into());
-    }
-    if lower.contains("enable javascript")
-        || lower.contains("checking your browser")
-        || lower.contains("verify you are human")
-        || lower.contains("just a moment")
-    {
-        warnings.push("possible_js_or_bot_challenge".into());
-        quality = quality.min(25);
-    }
-    if lower.contains("sign in") && words < 120 {
-        warnings.push("possible_auth_wall".into());
-        quality = quality.min(45);
-    }
+   if structured_added && words >= 40 {
+       quality = quality.max(62);
+   }
+   if words < 30 {
+       quality = quality.min(35);
+       warnings.push("very_little_meaningful_text".into());
+   }
+   if lower.contains("enable javascript")
+       || lower.contains("checking your browser")
+       || lower.contains("verify you are human")
+       || lower.contains("just a moment")
+   {
+       warnings.push("possible_js_or_bot_challenge".into());
+       quality = quality.min(25);
+   }
+   if lower.contains("sign in") && words < 120 {
+       warnings.push("possible_auth_wall".into());
+       quality = quality.min(45);
+   }
+
     if html_indicates_dynamic_shell(&document, words) && !structured_added {
         warnings.push("dynamic_shell_detected_static_content_only".into());
     }
@@ -565,15 +582,18 @@ async fn crawl(raw: &str, max_text: Option<usize>, include_ai_context: bool) -> 
     }
     stages.audit_ms = audit.elapsed().as_millis();
 
-    let ai_context = include_ai_context.then(|| {
-        format!(
-            "SOURCE: {}\nTITLE: {}\nQUALITY: {}/100\n\n{}",
-            final_url,
+    let (ai_context, compression) = if include_ai_context {
+        let (context, stats) = format_context(
+            &final_url,
             title.as_deref().unwrap_or("Untitled"),
             quality,
-            text
-        )
-    });
+            words,
+            &text,
+        );
+        (Some(context), Some(stats))
+    } else {
+        (None, None)
+    };
 
     Ok(CrawlResponse {
         ok: true,
@@ -599,6 +619,7 @@ async fn crawl(raw: &str, max_text: Option<usize>, include_ai_context: bool) -> 
         warnings,
         text: Some(text),
         ai_context,
+        compression,
         error: None,
     })
 }
@@ -615,24 +636,25 @@ async fn fetch_with_safe_redirects(mut target: SafeTarget) -> Result<FetchResult
             return Err(anyhow!("REDIRECT_LOOP"));
         }
 
-        let client = client_for_target(&target)?;
-        let request = client
-            .get(target.url.clone())
-            .header(header::ACCEPT, "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.7,*/*;q=0.2")
-            .header(header::ACCEPT_LANGUAGE, "en-IN,en;q=0.9")
-            .header("cache-control", "no-cache");
+       let client = client_for_target(&target)?;
+       let request = client
+           .get(target.url.clone())
+           .header(header::ACCEPT, "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.7,*/*;q=0.2")
+           .header(header::ACCEPT_LANGUAGE, "en-IN,en;q=0.9")
+           .header("cache-control", "no-cache");
 
-        let timer = Instant::now();
-        let response = request.send().await.context("FETCH_FAILED")?;
-        redirect_ms += timer.elapsed().as_millis();
+       let timer = Instant::now();
+       let response = request.send().await.context("FETCH_FAILED")?;
+       redirect_ms += timer.elapsed().as_millis();
 
-        if !response.status().is_redirection() {
-            return Ok(FetchResult {
-                response,
-                final_target: target,
-                redirect_ms,
-                dns_ms,
-                archive_fallback: false,
+       if !response.status().is_redirection() {
+           return Ok(FetchResult {
+               response,
+               final_target: target,
+
+                  redirect_ms,
+                  dns_ms,
+                  archive_fallback: false,
             });
         }
 
@@ -706,6 +728,7 @@ async fn read_response_limited(response: reqwest::Response, maximum: usize) -> R
 }
 
 fn client_for_target(target: &SafeTarget) -> Result<Client> {
+
     let host = target.url.host_str().ok_or_else(|| anyhow!("MISSING_HOST"))?;
     let port = target.url.port_or_known_default().unwrap_or(443);
     let key = format!("{}:{}:{}", host, port, target.ip);
@@ -782,14 +805,15 @@ async fn validate_target(raw: &str) -> Result<SafeTarget> {
             .context("DNS_TIMEOUT")?
             .context("DNS_FAILED")?;
             let mut selected = None;
-            while let Some(address) = addresses.next() {
-                if is_public_ip(address.ip()) {
-                    selected = Some(address.ip());
-                    break;
-                }
-            }
-            selected.ok_or_else(|| anyhow!("NO_PUBLIC_IP"))?
-        }
+
+             while let Some(address) = addresses.next() {
+                 if is_public_ip(address.ip()) {
+                     selected = Some(address.ip());
+                     break;
+                 }
+             }
+             selected.ok_or_else(|| anyhow!("NO_PUBLIC_IP"))?
+         }
     };
 
     if !is_public_ip(ip) {
@@ -820,7 +844,8 @@ fn is_public_ip(ip: IpAddr) -> bool {
             }
             let octets = address.octets();
             let global_unicast = octets[0] & 0xe0 == 0x20;
-            let documentation_range = octets[0] == 0x20 && octets[1] == 0x01 && octets[2] == 0x0d && octets[3] == 0xb8;
+            let documentation_range = octets[0] == 0x20 && octets[1] == 0x01 && octets[2] == 0x0d &&
+octets[3] == 0xb8;
             !(address.is_loopback()
                 || address.is_unspecified()
                 || address.is_unique_local()
@@ -867,71 +892,73 @@ impl StreamingHtmlSanitizer {
             if let Some(ignored) = self.ignored_tag.clone() {
                 let closing = format!("</{}", ignored);
                 if let Some(position) = find_ascii_case_insensitive(&self.pending, closing.as_bytes()) {
-                    if let Some(end_offset) = self.pending[position..].iter().position(|byte| *byte == b'>') {
-                        self.pending.drain(..position + end_offset + 1);
-                        self.ignored_tag = None;
-                        continue;
-                    }
-                    if position > 0 {
-                        self.pending.drain(..position);
-                    }
-                    break;
-                }
-                if final_chunk {
-                    self.pending.clear();
-                    break;
-                }
-                let keep = closing.len() + 4;
-                if self.pending.len() > keep {
-                    let remove = self.pending.len() - keep;
-                    self.pending.drain(..remove);
-                }
-                break;
-            }
+                    if let Some(end_offset) = self.pending[position..].iter().position(|byte| *byte == b'>')
+{
+                       self.pending.drain(..position + end_offset + 1);
+                       self.ignored_tag = None;
+                       continue;
+                   }
+                   if position > 0 {
+                       self.pending.drain(..position);
+                   }
+                   break;
+               }
+               if final_chunk {
+                   self.pending.clear();
+                   break;
+               }
+               let keep = closing.len() + 4;
+               if self.pending.len() > keep {
+                   let remove = self.pending.len() - keep;
+                   self.pending.drain(..remove);
+               }
+               break;
+           }
 
-            if self.pending.starts_with(b"<!--") {
-                if let Some(position) = find_bytes(&self.pending, b"-->") {
-                    self.pending.drain(..position + 3);
-                    continue;
-                }
-                if final_chunk || self.pending.len() > MAX_TAG_BUFFER_BYTES {
-                    self.pending.clear();
-                }
-                break;
-            }
+           if self.pending.starts_with(b"<!--") {
+               if let Some(position) = find_bytes(&self.pending, b"-->") {
+                   self.pending.drain(..position + 3);
+                   continue;
+               }
+               if final_chunk || self.pending.len() > MAX_TAG_BUFFER_BYTES {
+                   self.pending.clear();
+               }
+               break;
+           }
 
-            let Some(open_position) = self.pending.iter().position(|byte| *byte == b'<') else {
-                self.output.extend(self.pending.drain(..));
-                break;
-            };
-            if open_position > 0 {
-                self.output.extend(self.pending.drain(..open_position));
-                continue;
-            }
+           let Some(open_position) = self.pending.iter().position(|byte| *byte == b'<') else {
+               self.output.extend(self.pending.drain(..));
+               break;
+           };
+           if open_position > 0 {
+               self.output.extend(self.pending.drain(..open_position));
+               continue;
+           }
 
-            if self.pending.len() < 2 {
-                break;
-            }
-            let next = self.pending[1];
-            if !(next.is_ascii_alphabetic() || next == b'/' || next == b'!' || next == b'?') {
-                self.output.push(self.pending.remove(0));
-                continue;
-            }
-            let Some(end_position) = self.pending.iter().position(|byte| *byte == b'>') else {
-                if self.pending.len() > MAX_TAG_BUFFER_BYTES {
-                    self.pending.clear();
-                }
-                break;
-            };
+           if self.pending.len() < 2 {
+               break;
+           }
+           let next = self.pending[1];
+           if !(next.is_ascii_alphabetic() || next == b'/' || next == b'!' || next == b'?') {
+               self.output.push(self.pending.remove(0));
+               continue;
+           }
+           let Some(end_position) = self.pending.iter().position(|byte| *byte == b'>') else {
+               if self.pending.len() > MAX_TAG_BUFFER_BYTES {
+                   self.pending.clear();
+               }
+               break;
+           };
 
-            let tag_token: Vec<u8> = self.pending.drain(..=end_position).collect();
-            let (tag_name, closing, self_closing) = parse_tag_name(&tag_token);
-            if tag_name.is_empty() {
-                self.output.extend_from_slice(&tag_token);
-                continue;
-            }
+           let tag_token: Vec<u8> = self.pending.drain(..=end_position).collect();
+           let (tag_name, closing, self_closing) = parse_tag_name(&tag_token);
+           if tag_name.is_empty() {
+               self.output.extend_from_slice(&tag_token);
+               continue;
+           }
 
-            let lower_token = String::from_utf8_lossy(&tag_token).to_ascii_lowercase();
+           let lower_token = String::from_utf8_lossy(&tag_token).to_ascii_lowercase();
+
             if !closing && !self_closing && should_strip_tag(&tag_name, &lower_token) {
                 self.ignored_tag = Some(tag_name);
                 continue;
@@ -980,16 +1007,19 @@ fn parse_tag_name(token: &[u8]) -> (String, bool, bool) {
         index += 1;
     }
     let start = index;
-    while token.get(index).is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b':') {
+    while token.get(index).is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b':')
+{
         index += 1;
     }
     let name = String::from_utf8_lossy(&token[start..index]).to_ascii_lowercase();
-    let self_closing = token[..token.len().saturating_sub(1)].iter().rev().find(|byte| !byte.is_ascii_whitespace()).is_some_and(|byte| *byte == b'/');
+    let self_closing = token[..token.len().saturating_sub(1)].iter().rev().find(|byte|
+!byte.is_ascii_whitespace()).is_some_and(|byte| *byte == b'/');
     (name, closing, self_closing)
 }
 
 fn should_strip_tag(name: &str, token: &str) -> bool {
-    matches!(name, "style" | "svg" | "nav" | "noscript" | "template" | "iframe" | "object" | "embed" | "form")
+    matches!(name, "style" | "svg" | "nav" | "noscript" | "template" | "iframe" | "object" | "embed" |
+"form")
         || (name == "script" && !should_keep_json_script(token))
 }
 
@@ -1005,46 +1035,47 @@ fn extract_full_document(
     doc: &Html,
 ) -> (
     Option<String>,
-    Option<String>,
-    Option<String>,
-    String,
-    ExtractionStats,
-    Vec<String>,
-) {
-    let mut warnings = Vec::new();
-    let title = select_first_text(doc, "title");
-    let description = Selector::parse("meta[name='description'],meta[property='og:description']")
-        .ok()
-        .and_then(|selector| doc.select(&selector).next())
-        .and_then(|node| node.value().attr("content"))
-        .map(|value| clean(value.to_string()))
-        .filter(|value| !value.is_empty());
-    let language = Selector::parse("html")
-        .ok()
-        .and_then(|selector| doc.select(&selector).next())
-        .and_then(|node| node.value().attr("lang"))
-        .map(str::to_string);
 
-    let root = Selector::parse("body")
-        .ok()
-        .and_then(|selector| doc.select(&selector).next())
-        .or_else(|| Some(doc.root_element()));
-    let mut output = String::new();
-    let mut stats = ExtractionStats::default();
-    if let Some(root) = root {
-        walk_complete(root, &mut output, &mut stats);
-    }
-    let text = normalize_document_text(&output);
-    if text.is_empty() {
-        warnings.push("no_visible_text_found".into());
-    }
-    if stats.skipped_noise_nodes > 0 {
-        warnings.push(format!("filtered_{}_obvious_noise_nodes", stats.skipped_noise_nodes));
-    }
-    if stats.hidden_nodes > 0 {
-        warnings.push(format!("ignored_{}_hidden_or_aria_hidden_nodes", stats.hidden_nodes));
-    }
-    (title, description, language, text, stats, warnings)
+      Option<String>,
+      Option<String>,
+      String,
+      ExtractionStats,
+      Vec<String>,
+) {
+      let mut warnings = Vec::new();
+      let title = select_first_text(doc, "title");
+      let description = Selector::parse("meta[name='description'],meta[property='og:description']")
+          .ok()
+          .and_then(|selector| doc.select(&selector).next())
+          .and_then(|node| node.value().attr("content"))
+          .map(|value| clean(value.to_string()))
+          .filter(|value| !value.is_empty());
+      let language = Selector::parse("html")
+          .ok()
+          .and_then(|selector| doc.select(&selector).next())
+          .and_then(|node| node.value().attr("lang"))
+          .map(str::to_string);
+
+      let root = Selector::parse("body")
+          .ok()
+          .and_then(|selector| doc.select(&selector).next())
+          .or_else(|| Some(doc.root_element()));
+      let mut output = String::new();
+      let mut stats = ExtractionStats::default();
+      if let Some(root) = root {
+          walk_complete(root, &mut output, &mut stats);
+      }
+      let text = normalize_document_text(&output);
+      if text.is_empty() {
+          warnings.push("no_visible_text_found".into());
+      }
+      if stats.skipped_noise_nodes > 0 {
+          warnings.push(format!("filtered_{}_obvious_noise_nodes", stats.skipped_noise_nodes));
+      }
+      if stats.hidden_nodes > 0 {
+          warnings.push(format!("ignored_{}_hidden_or_aria_hidden_nodes", stats.hidden_nodes));
+      }
+      (title, description, language, text, stats, warnings)
 }
 
 fn walk_complete(node: ElementRef<'_>, output: &mut String, stats: &mut ExtractionStats) {
@@ -1063,32 +1094,33 @@ fn walk_complete(node: ElementRef<'_>, output: &mut String, stats: &mut Extracti
         return;
     }
 
-    let is_block = is_block_tag(tag);
-    if is_block && !output.is_empty() {
-        output.push_str("\n\n");
-    }
-    match tag {
-        "p" => stats.paragraphs = stats.paragraphs.saturating_add(1),
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => stats.headings = stats.headings.saturating_add(1),
-        "a" => stats.links = stats.links.saturating_add(1),
-        _ => {}
-    }
+      let is_block = is_block_tag(tag);
+      if is_block && !output.is_empty() {
+          output.push_str("\n\n");
+      }
+      match tag {
+          "p" => stats.paragraphs = stats.paragraphs.saturating_add(1),
+          "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => stats.headings = stats.headings.saturating_add(1),
+          "a" => stats.links = stats.links.saturating_add(1),
+          _ => {}
+      }
 
-    let mut had_text = false;
-    for child in node.children() {
-        if let Some(element) = ElementRef::wrap(child) {
-            walk_complete(element, output, stats);
-        } else if let Some(text) = child.value().as_text() {
-            let value = text.trim();
-            if !value.is_empty() {
-                if !output.is_empty() && !ends_with_separator(output) {
-                    output.push(' ');
-                }
-                output.push_str(value);
-                stats.emitted_words = stats.emitted_words.saturating_add(value.split_whitespace().count());
-                had_text = true;
-            }
-        }
+      let mut had_text = false;
+      for child in node.children() {
+          if let Some(element) = ElementRef::wrap(child) {
+              walk_complete(element, output, stats);
+          } else if let Some(text) = child.value().as_text() {
+              let value = text.trim();
+              if !value.is_empty() {
+
+               if !output.is_empty() && !ends_with_separator(output) {
+                   output.push(' ');
+               }
+               output.push_str(value);
+               stats.emitted_words = stats.emitted_words.saturating_add(value.split_whitespace().count());
+               had_text = true;
+           }
+       }
     }
     if is_block && (had_text || ends_with_non_separator(output)) {
         output.push_str("\n\n");
@@ -1098,15 +1130,20 @@ fn walk_complete(node: ElementRef<'_>, output: &mut String, stats: &mut Extracti
 
 fn should_skip_entire_node(node: &ElementRef<'_>) -> bool {
     let tag = node.value().name();
-    if matches!(tag, "script" | "style" | "template" | "svg" | "canvas" | "iframe" | "object" | "embed" | "form" | "nav" | "footer") {
+    if matches!(tag, "script" | "style" | "template" | "svg" | "canvas" | "iframe" | "object" | "embed" |
+"form" | "nav" | "footer") {
         return true;
     }
-    let attributes = format!("{} {}", node.value().id().unwrap_or(""), node.value().attr("class").unwrap_or("")).to_ascii_lowercase();
+    let attributes = format!("{} {}", node.value().id().unwrap_or(""),
+node.value().attr("class").unwrap_or("")).to_ascii_lowercase();
     const NOISE: [&str; 28] = [
-        "cookie-banner", "cookie-consent", "consent-banner", "consent-manager", "advertisement", "ad-container",
-        "ad-slot", "adsbygoogle", "sponsored-content", "newsletter-signup", "newsletter-form", "social-share",
+        "cookie-banner", "cookie-consent", "consent-banner", "consent-manager", "advertisement",
+"ad-container",
+        "ad-slot", "adsbygoogle", "sponsored-content", "newsletter-signup", "newsletter-form",
+"social-share",
         "share-tools", "breadcrumb", "login-modal", "signup-modal", "paywall", "modal-overlay", "sidebar",
-        "related-articles", "related-posts", "recommended-content", "popular-posts", "read-next", "pagination",
+        "related-articles", "related-posts", "recommended-content", "popular-posts", "read-next",
+"pagination",
         "post-navigation", "widget-area", "cookie-settings",
     ];
     NOISE.iter().any(|marker| attributes.contains(marker))
@@ -1114,10 +1151,12 @@ fn should_skip_entire_node(node: &ElementRef<'_>) -> bool {
 
 fn should_skip_low_density_block(node: &ElementRef<'_>) -> bool {
     let tag = node.value().name();
-    let attributes = format!("{} {}", node.value().id().unwrap_or(""), node.value().attr("class").unwrap_or("")).to_ascii_lowercase();
+    let attributes = format!("{} {}", node.value().id().unwrap_or(""),
+node.value().attr("class").unwrap_or("")).to_ascii_lowercase();
     let tagged_candidate = matches!(tag, "aside" | "ul" | "ol" | "li")
         || ((tag == "div" || tag == "section")
-            && ["sidebar", "related", "recommend", "popular", "read-next", "trending", "widget", "more-stories"]
+            && ["sidebar", "related", "recommend", "popular", "read-next", "trending", "widget",
+"more-stories"]
                 .iter()
                 .any(|marker| attributes.contains(marker)));
     if !tagged_candidate {
@@ -1150,10 +1189,12 @@ fn collect_density(node: &ElementRef<'_>, inside_link: bool, metrics: &mut Densi
             let word_count = text.split_whitespace().count();
             metrics.words = metrics.words.saturating_add(word_count);
             if inside_link {
+
                 metrics.linked_words = metrics.linked_words.saturating_add(word_count);
             }
             metrics.punctuation = metrics.punctuation.saturating_add(
-                text.chars().filter(|character| matches!(character, '.' | ',' | ';' | ':' | '!' | '?')).count(),
+                text.chars().filter(|character| matches!(character, '.' | ',' | ';' | ':' | '!' |
+'?')).count(),
             );
         }
     }
@@ -1161,7 +1202,8 @@ fn collect_density(node: &ElementRef<'_>, inside_link: bool, metrics: &mut Densi
 
 fn extract_structured_json_text(doc: &Html) -> String {
     let Ok(selector) = Selector::parse(
-        "script[type='application/ld+json'],script#__NEXT_DATA__,script#__NUXT_DATA__,script[data-hydration],script[type='application/json']",
+        "script[type='application/ld+json'],script#__NEXT_DATA__,script#__NUXT_DATA__,script[data-hydration],
+script[type='application/json']",
     ) else {
         return String::new();
     };
@@ -1196,13 +1238,15 @@ fn collect_json_strings(
         Value::String(text) => {
             let normalized = clean(text.to_string());
             let key = parent_key.unwrap_or("").to_ascii_lowercase();
-            let content_key = matches!(key.as_str(), "articlebody" | "description" | "abstract" | "text" | "content" | "headline" | "name" | "title" | "summary" | "caption" | "rendered");
+            let content_key = matches!(key.as_str(), "articlebody" | "description" | "abstract" | "text" |
+"content" | "headline" | "name" | "title" | "summary" | "caption" | "rendered");
             let looks_like_content = normalized.split_whitespace().count() >= 8
                 && normalized.len() >= 48
                 && !normalized.starts_with("http://")
                 && !normalized.starts_with("https://")
                 && !normalized.contains("data:image/");
-            if (content_key || normalized.len() >= 120) && looks_like_content && seen.insert(normalized.clone()) {
+            if (content_key || normalized.len() >= 120) && looks_like_content &&
+seen.insert(normalized.clone()) {
                 let take = normalized.len().min(*budget);
                 let fragment = truncate_utf8_safely(&normalized, take);
                 *budget = (*budget).saturating_sub(fragment.len());
@@ -1220,13 +1264,15 @@ fn collect_json_strings(
         Value::Object(map) => {
             for (key, child) in map {
                 let lower_key = key.to_ascii_lowercase();
-                if matches!(lower_key.as_str(), "url" | "@id" | "image" | "images" | "src" | "href" | "id" | "thumbnail" | "logo") {
-                    continue;
-                }
-                collect_json_strings(child, Some(key), output, seen, budget);
-                if *budget == 0 {
-                    break;
-                }
+                if matches!(lower_key.as_str(), "url" | "@id" | "image" | "images" | "src" | "href" | "id" |
+"thumbnail" | "logo") {
+
+                      continue;
+                  }
+                  collect_json_strings(child, Some(key), output, seen, budget);
+                  if *budget == 0 {
+                      break;
+                  }
             }
         }
         _ => {}
@@ -1297,6 +1343,7 @@ fn html_indicates_dynamic_shell(doc: &Html, words: usize) -> bool {
 
 fn normalize_document_text(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
+
     let mut pending_space = false;
     let mut pending_breaks = 0usize;
     for character in input.chars() {
@@ -1373,7 +1420,9 @@ mod tests {
     fn html_stream_sanitizer_removes_script_but_preserves_structured_json() {
         let mut sanitizer = StreamingHtmlSanitizer::default();
         sanitizer.push(b"<html><body><script>const secret = 'noise';</script><p>Article text.</p>");
-        sanitizer.push(b"<script type=\"application/ld+json\">{\"articleBody\":\"Useful article body content.\"}</script></body></html>");
+
+        sanitizer.push(b"<script type=\"application/ld+json\">{\"articleBody\":\"Useful article body
+content.\"}</script></body></html>");
         sanitizer.finish();
         let output = String::from_utf8(sanitizer.into_output()).expect("sanitized HTML should remain UTF-8");
         assert!(!output.contains("const secret"));
@@ -1381,26 +1430,27 @@ mod tests {
         assert!(output.contains("Article text"));
     }
 
-    #[test]
-    fn tokenizer_recognizes_self_closing_and_closing_tags() {
-        assert_eq!(parse_tag_name(b"<img src='x' />"), ("img".to_string(), false, true));
-        assert_eq!(parse_tag_name(b"</article>"), ("article".to_string(), true, false));
-    }
+   #[test]
+   fn tokenizer_recognizes_self_closing_and_closing_tags() {
+       assert_eq!(parse_tag_name(b"<img src='x' />"), ("img".to_string(), false, true));
+       assert_eq!(parse_tag_name(b"</article>"), ("article".to_string(), true, false));
+   }
 
-    #[test]
-    fn private_and_documentation_addresses_are_rejected() {
-        assert!(!is_public_ip("127.0.0.1".parse().expect("valid IPv4")));
-        assert!(!is_public_ip("10.1.2.3".parse().expect("valid IPv4")));
-        assert!(!is_public_ip("192.0.2.10".parse().expect("valid IPv4")));
-        assert!(!is_public_ip("2001:db8::1".parse().expect("valid IPv6")));
-        assert!(is_public_ip("8.8.8.8".parse().expect("valid IPv4")));
-    }
+   #[test]
+   fn private_and_documentation_addresses_are_rejected() {
+       assert!(!is_public_ip("127.0.0.1".parse().expect("valid IPv4")));
+       assert!(!is_public_ip("10.1.2.3".parse().expect("valid IPv4")));
+       assert!(!is_public_ip("192.0.2.10".parse().expect("valid IPv4")));
+       assert!(!is_public_ip("2001:db8::1".parse().expect("valid IPv6")));
+       assert!(is_public_ip("8.8.8.8".parse().expect("valid IPv4")));
+   }
 
     #[test]
     fn extraction_drops_link_dense_related_lists_but_keeps_article_paragraphs() {
         let document = Html::parse_document(
             r#"<html><head><title>Test Article</title></head><body>
-            <main><article><h1>Primary heading</h1><p>This is the actual article paragraph with enough useful words and punctuation. It explains the main topic clearly for a reader.</p></article>
+            <main><article><h1>Primary heading</h1><p>This is the actual article paragraph with enough useful
+words and punctuation. It explains the main topic clearly for a reader.</p></article>
             <aside class="related-articles"><ul>
             <li><a href="/a">Related one</a></li><li><a href="/b">Related two</a></li>
             <li><a href="/c">Related three</a></li><li><a href="/d">Related four</a></li>
