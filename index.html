@@ -1,11 +1,12 @@
 
+
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>ArixAI Ultra-Fast Search & Full Page Extraction</title>
+<title>ArixAI v4.1 - Search, Full Extraction & LLM Context</title>
 <style>
 :root{
 --bg:#07090d;--card:rgba(14,18,25,0.85);--border:#202938;--border-active:#3b475d;
@@ -36,6 +37,7 @@ inter;font-size:14px;display:inline-flex;align-items:center;gap:7px;transition:o
 .btn:hover{opacity:.92}
 .btn:disabled{opacity:.4;cursor:wait}
 .btn-ghost{background:#151c27;color:#dce5f2;border:1px solid #253043}
+
 .btn-ghost:hover{background:#1d2737}
 .controls{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
 .control-item label{display:block;font-size:10px;font-weight:900;letter-spacing:.12em;color:var(--muted);marg
@@ -107,11 +109,12 @@ rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:opacity .2s;z-index:90}
 <button id="tabQuery" type="button" class="btn" style="padding: 7px 16px; font-size: 12px;">Query
 Search</button>
 <button id="tabCustom" type="button" class="btn btn-ghost" style="padding: 7px 16px; font-size:
-12px;">Custom URLs (Up to 40)</button>
+12px;">Custom URLs (Up to 60)</button>
 </div>
 <!-- Mode 1: Search Query -->
 <div id="queryBox">
 <div class="eyebrow">ENTER SEARCH QUERY</div>
+
 <div class="searchbox">
 <input id="query" class="input" placeholder="e.g. todays news india or transformer architecture in deep
 learning" autocomplete="off" autofocus>
@@ -120,7 +123,7 @@ learning" autocomplete="off" autofocus>
 </div>
 <!-- Mode 2: Custom URL Direct Paste -->
 <div id="customBox" class="hidden">
-<div class="eyebrow">PASTE DIRECT URLS (SEPARATED BY COMMA, SPACE, OR NEWLINE - MAX 40)</div>
+<div class="eyebrow">PASTE DIRECT URLS (SEPARATED BY COMMA, SPACE, OR NEWLINE - MAX 60)</div>
 <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 10px;">
 <textarea id="customUrls" class="input" rows="4" style="resize: vertical; font-family: monospace;
 font-size: 13px;" placeholder="https://www.quora.com/topic-example&#10;https://www.justdial.com/page-example,
@@ -157,6 +160,10 @@ Directly</button>
 <option value="10" selected>Top 10 results</option>
 <option value="15">Top 15 results</option>
 <option value="20">Top 20 results</option>
+<option value="30">Top 30 results</option>
+<option value="40">Top 40 results</option>
+<option value="50">Top 50 results</option>
+<option value="60">Top 60 results</option>
 </select>
 </div>
 <div class="control-item">
@@ -166,12 +173,12 @@ spellcheck="false">
 </div>
 </div>
 <div class="filter-row">
-<span class="eyebrow">Strict Quality Filters:</span>
+<span class="eyebrow">Relevance Tiers (not verification):</span>
 <label class="chk"><input type="checkbox" id="fStrong" checked> Strong match</label>
 <label class="chk"><input type="checkbox" id="fLikely" checked> Likely relevant</label>
 <label class="chk"><input type="checkbox" id="fPartial" checked> Partial match</label>
-<span style="font-size:11px;color:var(--muted);margin-left:auto">YouTube, weak matches (<25%), and
-access-denied pages are automatically discarded</span>
+<label class="chk"><input type="checkbox" id="fWeak" checked> Include weak matches</label>
+<span style="font-size:11px;color:var(--muted);margin-left:auto">YouTube is excluded; weak matches remain eligible for real crawl verification</span>
 </div>
 <div class="progress"><div class="bar" id="progressBar"></div></div>
 </section>
@@ -188,6 +195,7 @@ access-denied pages are automatically discarded</span>
 <section id="resultsSection" class="hidden">
 <div class="summary">
 <h2>Full Extracted Pages (<span id="resultsCount">0</span>)</h2>
+
 <div class="actions-row">
 <button id="copyJsonBtn" class="btn btn-ghost">Copy Full JSON</button>
 <button id="viewJsonBtn" class="btn btn-ghost">Toggle Raw JSON</button>
@@ -232,7 +240,7 @@ currentExportPayload = null;
 function scoreCandidate(item, query) {
 if (typeof item.relevanceScore === 'number' && item.relevanceScore > 0) {
 const s = item.relevanceScore;
-return { score: s, band: s >= 78 ? 'Strong match' : (s >= 52 ? 'Likely relevant' : (s >= 30 ? 'Partial match' : 'Weak match')) };
+return { score: s, band: s >= 70 ? 'Strong match' : (s >= 42 ? 'Likely relevant' : (s >= 15 ? 'Partial match' : 'Weak match')) };
 }
 const q = String(query || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/ /).filter(w =>
 w.length > 2);
@@ -247,8 +255,17 @@ else if (snippet.includes(t)) hits += 2;
 const base = Math.min(100, Math.round((hits / (q.length * 4)) * 100));
 const trust = Math.round(Number(item.trust || 0.6) * 10);
 const score = Math.max(0, Math.min(100, base + trust + (item.verified ? 8 : 0)));
-return { score, band: score >= 78 ? 'Strong match' : (score >= 52 ? 'Likely relevant' : (score >= 30 ?
-'Partial match' : 'Weak match')) };
+return { score, band: score >= 70 ? 'Strong match' : (score >= 42 ? 'Likely relevant' : (score >= 15 ? 'Partial match' : 'Weak match')) };
+}
+function urlLookupKey(value) {
+try {
+  const u = new URL(String(value || ''));
+  u.hash = '';
+  for (const key of [...u.searchParams.keys()]) {
+    if (/^(utm_|fbclid$|gclid$|dclid$|msclkid$|ref$|src$|trk$|tracking)/i.test(key)) u.searchParams.delete(key);
+  }
+  return `${u.hostname.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+/g, '/').replace(/\/$/, '')}${u.search}`;
+} catch { return ''; }
 }
 function isYouTube(url) {
 try {
@@ -263,6 +280,7 @@ const query = $('query').value.trim();
 if (query.length < 2) {
 alert('Please enter a valid search query.');
 $('query').focus();
+
 return;
 }
 resetUi();
@@ -277,8 +295,10 @@ const allowedBands = new Set();
 if ($('fStrong').checked) allowedBands.add('Strong match');
 if ($('fLikely').checked) allowedBands.add('Likely relevant');
 if ($('fPartial').checked) allowedBands.add('Partial match');
+if ($('fWeak').checked) allowedBands.add('Weak match');
 const pipeStart = performance.now();
 let searchLatency = 0;
+let serverPreCrawlLatency = 0;
 let rawResults = [];
 // DIRECT CUSTOM URL CRAWLER (SKIPS SEARCH ENGINE DISCOVERY)
 async function executeCustomCrawl() {
@@ -298,7 +318,7 @@ if (!seen.has(u)) {
 seen.add(u);
 urls.push(u);
 }
-if (urls.length >= 40) break;
+if (urls.length >= 60) break;
 }
 if (!urls.length) {
 alert('No valid URLs found.');
@@ -339,9 +359,12 @@ title: ext.title || 'Untitled Web Page',
 url: ext.final_url || ext.url,
 domain: new URL(ext.final_url || ext.url).hostname.replace(/^www\./, ''),
 matchBand: 'Direct Crawl',
+
 matchScore: 100,
 type: 'web',
 content: ext.text,
+llmContext: ext.ai_context || ext.text,
+compression: ext.compression || null,
 wordCount: ext.word_count || ext.text.split(/ /).filter(Boolean).length,
 characterCount: ext.character_count || ext.text.length,
 quality: Number.isFinite(Number(ext.quality)) ? Number(ext.quality) : 0,
@@ -359,7 +382,8 @@ warnings: ext.warnings
 failedCount++;
 }
 });
-$('tok').textContent = successfulPages.length;
+failedCount = Math.max(failedCount, urls.length - successfulPages.length);
+$('tOk').textContent = successfulPages.length;
 $('tFailed').textContent = failedCount;
 $('tDiscarded').textContent = '0';$('tQuality').textContent = successfulPages.length ? '100%' : '-';
 currentExportPayload = {
@@ -393,6 +417,9 @@ searchLatency = Math.round(performance.now() - searchStart);
 $('tSearch').textContent = ms(searchLatency);
 if (!res.ok) throw new Error(`Search engine returned HTTP ${res.status}`);
 const data = await res.json();
+searchLatency = Number.isFinite(Number(data.discoveryLatencyMs)) ? Number(data.discoveryLatencyMs) : searchLatency;
+$('tSearch').textContent = ms(searchLatency);
+serverPreCrawlLatency = Number(data.searchPlan?.fullPageCrawlLatencyMs || 0);
 rawResults = Array.isArray(data.results) ? data.results : [];
 } catch (err) {
 setStatus('SEARCH FAILED', false, true);
@@ -414,7 +441,8 @@ continue;
 const { score, band } = scoreCandidate(r, query);
 r._score = score;
 r._band = band;
-if (band === 'Weak match' || !allowedBands.has(band) || candidates.length >= candidateLimit) {
+if (!allowedBands.has(band) || candidates.length >= candidateLimit) {
+
 discardedCount++;
 continue;
 }
@@ -422,10 +450,17 @@ candidates.push(r);
 }
 $('tDiscarded').textContent = discardedCount;
 if (!candidates.length) {
-$('tTotal').textContent = ms(Math.round(performance.now() - pipeStart));$('progressBar').style.width =
-'100%';
+const totalLatency = Math.round(performance.now() - pipeStart);
+$('tExtract').textContent = 'NOT STARTED (0 candidates)';
+$('tTotal').textContent = ms(totalLatency);
+$('tOk').textContent = '0';
+$('tFailed').textContent = '0';
+$('tQuality').textContent = '—';
+$('progressBar').style.width = '100%';
+currentExportPayload = { ok: true, query, timestamp: new Date().toISOString(), telemetry: { searchLatencyMs: searchLatency, extractionLatencyMs: null, extractionAttempted: false, serverPreCrawlLatencyMs: serverPreCrawlLatency, totalLatencyMs: totalLatency, discoveredUrls: rawResults.length, candidateUrls: 0, successfulPagesCount: 0, failedOrBlockedCount: 0, discardedNoiseCount: discardedCount }, results: [], warnings: ['No sources passed the selected relevance-tier and URL/type checks; the crawler was not invoked.'] };
+$('rawJsonContent').textContent = JSON.stringify(currentExportPayload, null, 2);
 renderSuccessfulCards([]);
-setStatus('NO RELEVANT URLS FOUND');
+setStatus('NO CRAWLABLE SOURCES');
 return;
 }
 // STAGE 3: Reuse full-page content fetched during live search discovery.
@@ -435,19 +470,22 @@ const extractStart = performance.now();
 const extractedMap = new Map();
 const fallbackCandidates = [];
 for (const candidate of candidates) {
-  if (candidate.contentAvailable === true && candidate.contentStatus === 'full-page-extracted' && typeof candidate.pageContent === 'string' && candidate.pageContent.trim()) {
+  if (candidate.contentAvailable === true && candidate.contentStatus === 'full-page-extracted' && typeof
+candidate.pageContent === 'string' && candidate.pageContent.trim()) {
     const page = {
-      ok: true,
-      url: candidate.url,
-      final_url: candidate.contentSourceUrl || candidate.url,
-      title: candidate.title,
-      text: candidate.pageContent,
-      word_count: candidate.pageContent.split(/\s+/).filter(Boolean).length,
-      character_count: candidate.contentLength || candidate.pageContent.length,
-      quality: candidate.contentQuality || Math.round((candidate.contentConfidence || 0) * 100),
-      method: candidate.contentMethod || 'rust-streaming-extractor',
-      stages: candidate.crawlStages || {},
-      warnings: candidate.crawlWarnings || []
+       ok: true,
+       url: candidate.url,
+       final_url: candidate.contentSourceUrl || candidate.url,
+       title: candidate.title,
+       text: candidate.pageContent,
+       ai_context: candidate.contentForAI || candidate.pageContent,
+       compression: candidate.compression || null,
+       word_count: candidate.pageContent.split(/ /).filter(Boolean).length,
+       character_count: candidate.contentLength || candidate.pageContent.length,
+       quality: candidate.contentQuality || Math.round((candidate.contentConfidence || 0) * 100),
+       method: candidate.contentMethod || 'rust-streaming-extractor',
+       stages: candidate.crawlStages || {},
+       warnings: candidate.crawlWarnings || []
     };
     extractedMap.set(candidate.url, page);
     extractedMap.set(page.final_url, page);
@@ -459,31 +497,34 @@ let fallbackFailed = false;
 if (fallbackCandidates.length) {
   try {
     const res = await fetch(extractorEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ action: 'crawl', urls: fallbackCandidates.map(candidate => candidate.url), max_text: 120000, include_ai_context: true })
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+       body: JSON.stringify({ action: 'crawl', urls: fallbackCandidates.map(candidate => candidate.url), include_ai_context: true })
     });
     if (!res.ok) throw new Error(`Crawler returned HTTP ${res.status}`);
     const extractData = await res.json();
     (extractData.results || []).forEach(item => {
-      if (item.url) extractedMap.set(item.url, item);
-      if (item.final_url) extractedMap.set(item.final_url, item);
+       if (item.url) extractedMap.set(item.url, item);
+       if (item.final_url) extractedMap.set(item.final_url, item);
+       if (urlLookupKey(item.url)) extractedMap.set(urlLookupKey(item.url), item);
+       if (urlLookupKey(item.final_url)) extractedMap.set(urlLookupKey(item.final_url), item);
     });
   } catch (err) {
     fallbackFailed = true;
     console.warn('ArixAI fallback extraction did not complete:', err?.message || err);
   }
 }
-const extractionLatency = Math.round(performance.now() - extractStart);
+const fallbackExtractionLatency = Math.round(performance.now() - extractStart);
+const extractionLatency = Math.max(serverPreCrawlLatency, fallbackExtractionLatency);
 const totalLatency = Math.round(performance.now() - pipeStart);
 $('tExtract').textContent = ms(extractionLatency);$('tTotal').textContent = ms(totalLatency);
 // STAGE 4: Process Only Successful Extractions
 const successfulPages = [];
 let failedCount = 0;
 for (const c of candidates) {
-const ext = extractedMap.get(c.url);
+const ext = extractedMap.get(c.url) || extractedMap.get(urlLookupKey(c.url));
 // Require the full-page crawler to have succeeded with real body content
-if (ext && ext.ok && ext.text && ext.text.length >= 80) {
+if (ext && ext.ok && ext.text && ext.text.length >= 25) {
 successfulPages.push({
 rank: successfulPages.length + 1,
 title: ext.title || c.title || 'Untitled Web Page',
@@ -494,6 +535,8 @@ matchBand: c._band,
 matchScore: c._score,
 type: c.type || 'web',
 content: ext.text, // COMPLETE FULL PAGE TEXT
+llmContext: ext.ai_context || ext.text,
+compression: ext.compression || null,
 wordCount: ext.word_count || ext.text.split(/ /).filter(Boolean).length,
 characterCount: ext.character_count || ext.text.length,
 quality: Number.isFinite(Number(ext.quality)) ? Number(ext.quality) : 0,
@@ -528,6 +571,9 @@ timestamp: new Date().toISOString(),
 telemetry: {
 searchLatencyMs: searchLatency,
 extractionLatencyMs: extractionLatency,
+serverPreCrawlLatencyMs: serverPreCrawlLatency,
+fallbackExtractionLatencyMs: fallbackExtractionLatency,
+extractionAttempted: candidates.length > 0,
 totalLatencyMs: totalLatency,
 discoveredUrls: rawResults.length,
 candidateUrls: candidates.length,
@@ -564,13 +610,14 @@ article.className = 'result';
 article.innerHTML = `
 <div class="resultHead">
 <div>
+
 <div class="eyebrow">#${idx + 1} · FULL PAGE EXTRACTION · ${esc(p.domain)}</div>
 <h3>${esc(p.title)}</h3>
 <a class="url" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a>
 </div>
 <div class="scoreBadge">
 <b>${p.matchScore}%</b>
-<span>${p.matchScore >= 78 ? 'STRONG' : 'MATCH'}</span>
+<span>${p.matchScore >= 70 ? 'STRONG' : 'MATCH'}</span>
 </div>
 </div>
 <div class="meta">
@@ -578,12 +625,13 @@ article.innerHTML = `
 <span><b>${p.wordCount.toLocaleString()} words</b></span>
 <span>${p.characterCount.toLocaleString()} chars</span>
 <span>Quality ${p.quality}/100</span>
+${p.compression ? `<span>LLM context: ${Number(p.compression.net_bytes_saved || 0).toLocaleString()} bytes saved · ${Number(p.compression.aliases_used || 0)} aliases</span>` : ''}
 <span>Fetch ${ms(p.stages?.fetch_ms)}</span>
 <span>Parse ${ms((p.stages?.parse_ms || 0) + (p.stages?.extraction_ms || 0))}</span>
 <button class="btn btn-ghost" style="padding:4px 10px;font-size:11px;margin-left:auto"
 data-copy-url="${esc(p.url)}">Copy URL</button>
-<button class="btn btn-ghost" style="padding:4px 10px;font-size:11px" data-copy-text="${idx}">Copy
-Full Content</button>
+<button class="btn btn-ghost" style="padding:4px 10px;font-size:11px" data-copy-text="${idx}">Copy Full Content</button>
+<button class="btn btn-ghost" style="padding:4px 10px;font-size:11px" data-copy-ai="${idx}">Copy LLM Context</button>
 </div>
 <div class="content">${esc(p.content)}</div>
 <details>
@@ -597,6 +645,12 @@ container.appendChild(article);
 container.querySelectorAll('[data-copy-url]').forEach(btn => {
 btn.addEventListener('click', () => {
 navigator.clipboard.writeText(btn.getAttribute('data-copy-url')).then(() => showToast('URL copied!'));
+});
+});
+container.querySelectorAll('[data-copy-ai]').forEach(btn => {
+btn.addEventListener('click', () => {
+const item = pages[Number(btn.getAttribute('data-copy-ai'))];
+navigator.clipboard.writeText(item.llmContext || item.content || '').then(() => showToast('LLM context copied!'));
 });
 });
 container.querySelectorAll('[data-copy-text]').forEach(btn => {
@@ -635,3 +689,4 @@ $('viewJsonBtn').addEventListener('click', () => {$('rawJsonBox').classList.togg
 </script>
 </body>
 </html>
+
