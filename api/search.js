@@ -305,7 +305,8 @@ true;
   try {
     const u = new URL(url);
     const raw = `${u.href} ${decodeUri(u.href)}`;
-    if (!googleNewsArticle && /(?:^|[/:.?=&_-])(?:www\.)?(?:google\.com|bing\.com|search\.brave\.com|yahoo\.com|mojeek\.com)(?:[/:?#=&_-]|$)/i.test(raw)) {
+    if (!googleNewsArticle && /(?:^|[/:.?=&_-])(?:www\.)?(?:google\.com|bing\.com|search\.brave\.com|yahoo\.c
+om|mojeek\.com)(?:[/:?#=&_-]|$)/i.test(raw)) {
       return true;
     }
     return TRACKING_PATH.test(u.pathname);
@@ -516,7 +517,8 @@ function parseMaybeDateFromText(v) {
   const s = String(v || '');
   const candidates =
     s.match(
-      /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?) \d{1,2}(?:,\s*| )\d{4}\b|\b20\d{2}-\d{1,2}-\d{1,2}\b/gi
+      /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:em
+ber)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?) \d{1,2}(?:,\s*| )\d{4}\b|\b20\d{2}-\d{1,2}-\d{1,2}\b/gi
     ) || [];
   for (const c of candidates) {
     const t = Date.parse(c);
@@ -587,10 +589,13 @@ export function queryPlan(query, options = {}) {
 []).map(normalizeText));
   const coreTerms = selectCoreTerms(q, uniqueTerms, anchors);
   const quotedPhrases = extractQuotedPhrases(q);
-  const live = /\b(latest|today|current|recent|breaking|this week|this month|yesterday|newly|as of)\b/i.test(q);
+  const live = /\b(latest|today|current|recent|breaking|this week|this month|yesterday|newly|as
+of)\b/i.test(q);
   const history = /\b(history|historical|timeline|origins?|evolution|development|milestones)\b/i.test(q);
-  const official = /\b(official|government|govt|ministry|scheme|policy|law|act|rule|regulation|tax|gst|rbi|sebi|mca|notification|circular|guideline|statute)\b/i.test(q);
-  const academic = /\b(research|study|paper|academic|journal|thesis|evidence|peer[- ]reviewed|literature)\b/i.test(q);
+  const official = /\b(official|government|govt|ministry|scheme|policy|law|act|rule|regulation|tax|gst|rbi|se
+bi|mca|notification|circular|guideline|statute)\b/i.test(q);
+  const academic = /\b(research|study|paper|academic|journal|thesis|evidence|peer[-
+]reviewed|literature)\b/i.test(q);
   const exactish = coreTerms.length <= 7 ? coreTerms.join(' ') : coreTerms.slice(0, 7).join(' ');
   const coreQuery = coreTerms.join(' ').trim();
 
@@ -708,7 +713,8 @@ function decodeEntities(v = '') {
 
 function searchTitle(v) {
   const t = cleanSnippet(decodeEntities(v || '')).replace(/ /g, ' ').trim();
-  if (!t || t.length < 2 || /^(images?|videos?|maps?|news|shopping|settings|sign in|log in|menu|more|next|previous|feedback|tools)$/i.test(t)) {
+  if (!t || t.length < 2 || /^(images?|videos?|maps?|news|shopping|settings|sign in|log
+in|menu|more|next|previous|feedback|tools)$/i.test(t)) {
     return '';
   }
   return truncate(t, 500);
@@ -717,7 +723,8 @@ function searchTitle(v) {
 function hasSearchNoiseTitle(v) {
 
   const t = normalizeText(v);
-  return !t || /^(sponsored|ad|advertisement|ads|sign in|log in|privacy|terms|cookie|feedback|more results|related searches|people also ask|images|videos|maps|shopping|news)$/.test(t);
+  return !t || /^(sponsored|ad|advertisement|ads|sign in|log in|privacy|terms|cookie|feedback|more
+results|related searches|people also ask|images|videos|maps|shopping|news)$/.test(t);
 }
 
 function resultContext(html, index, width = 2500) {
@@ -744,7 +751,8 @@ function scoreSearchAnchor(url, title, context, provider) {
     if (title.length <= 180) score += 3;
     else score -= 4;
 
-  if (/\b(home|homepage|about us|contact us|careers|login|sign in|privacy policy|terms of service)\b/i.test(title)) score -= 8;
+  if (/\b(home|homepage|about us|contact us|careers|login|sign in|privacy policy|terms of
+service)\b/i.test(title)) score -= 8;
   if (/\b(sponsored|advertisement|ad)\b/i.test(title)) score -= 18;
   if (new URL(url).pathname && new URL(url).pathname !== '/') score += 3;
   if (/\b(?:result|organic|web-result|b_algo|MjjYud|result__a|algo|search-result)\b/i.test(context)) score +=
@@ -886,8 +894,10 @@ export function parseRssSearch(text, req, provider = req.provider) {
     const item = items[i];
     const title = searchTitle((item.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ''])[1]);
     const link = decodeEntities((item.match(/<link[^>]*>([\s\S]*?)<\/link>/i) || [, ''])[1]);
-    const desc = cleanSnippet((item.match(/<(?:description|content:encoded)[^>]*>([\s\S]*?)<\/(?:description|content:encoded)>/i) || [, ''])[1]);
-    const pub = decodeEntities((item.match(/<(?:pubDate|published|updated)[^>]*>([\s\S]*?)<\/(?:pubDate|published|updated)>/i) || [, ''])[1]);
+    const desc = cleanSnippet((item.match(/<(?:description|content:encoded)[^>]*>([\s\S]*?)<\/(?:description|
+content:encoded)>/i) || [, ''])[1]);
+    const pub = decodeEntities((item.match(/<(?:pubDate|published|updated)[^>]*>([\s\S]*?)<\/(?:pubDate|publi
+shed|updated)>/i) || [, ''])[1]);
     const c = makeCandidate(link, title, desc, provider, req.type, {
       publishedAt: safeDate(pub),
       providerRank: out.length + 1,
@@ -946,7 +956,8 @@ function parseYoutube(html, req) {
   const out = [];
   const seen = new Set();
   const s = String(html || '');
-  for (const m of s.matchAll(/"videoRenderer"\s*:\s*\{[\s\S]*?"videoId"\s*:\s*"([A-Za-z0-9_-]{6,20})"[\s\S]*?"title"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"((?:\\.|[^"\\])*)"/g)) {
+  for (const m of s.matchAll(/"videoRenderer"\s*:\s*\{[\s\S]*?"videoId"\s*:\s*"([A-Za-z0-9_-]{6,20})"[\s\S]*?
+"title"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"((?:\\.|[^"\\])*)"/g)) {
     const id = m[1];
     if (seen.has(id)) continue;
     seen.add(id);
@@ -964,7 +975,8 @@ function parseYoutube(html, req) {
       const id = m[1];
       if (seen.has(id)) continue;
       seen.add(id);
-      const c = makeCandidate(`https://www.youtube.com/watch?v=${id}`, `YouTube video ${id}`, 'YouTube result', 'youtube', 'video', {
+      const c = makeCandidate(`https://www.youtube.com/watch?v=${id}`, `YouTube video ${id}`, 'YouTube
+result', 'youtube', 'video', {
         providerRank: out.length + 1,
         queryVariant: req.queryVariant
       });
@@ -1029,7 +1041,8 @@ export function providerRequests(queries, plan, deep) {
     }
   }
 
-  if (plan.flags.academic || /\b(arxiv|peer[- ]reviewed|journal|research paper|academic)\b/i.test(plan.query)) {
+  if (plan.flags.academic || /\b(arxiv|peer[- ]reviewed|journal|research
+paper|academic)\b/i.test(plan.query)) {
     add('wikipedia', base, 'web',
       `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(base)}&limit=60&namespace=0&format=json&origin=*`, 0, 'fast');
     add('arxiv', base, 'doc',
@@ -1092,7 +1105,8 @@ async function fetchWithTimeout(url, timeout, deadline, headers = {}, externalSi
 
       headers: {
         'user-agent': USER_AGENT,
-        accept: 'text/html,application/xhtml+xml,application/xml,application/rss+xml,text/plain;q=0.9,application/pdf;q=0.8,*/*;q=0.1',
+        accept: 'text/html,application/xhtml+xml,application/xml,application/rss+xml,text/plain;q=0.9,applica
+tion/pdf;q=0.8,*/*;q=0.1',
         'accept-language': 'en-IN,en;q=0.9',
         ...headers
       }
@@ -1207,7 +1221,8 @@ export function urlSpamPenalty(url, focusTerms = []) {
     const hostHyphens = (host.match(/-/g) || []).length;
     const pathHyphens = (parsed.pathname.match(/-/g) || []).length;
     const pathSegments = parsed.pathname.split('/').filter(Boolean);
-    const queryTokens = [...parsed.searchParams.values()].join(' ').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    const queryTokens = [...parsed.searchParams.values()].join('
+').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
     const distinctQueryTokens = new Set(queryTokens);
     let penalty = Math.max(0, hostHyphens - 2) * 2.2 + Math.max(0, pathHyphens - 5) * 0.9;
     if (pathSegments.length > 7) penalty += (pathSegments.length - 7) * 1.5;
@@ -1310,7 +1325,8 @@ function domainQuality(url) {
   else if (isTrusted(url)) score = 0.93;
   else if (/\.edu(?:\.|$)/i.test(h) || /\.ac\.(?:in|uk|jp|nz)$/i.test(h)) score = 0.9;
   else if (
-    /(?:reuters|apnews|bbc|theguardian|nytimes|economist|nature|science|arxiv|nasa|who|wikipedia|britannica|investopedia|microsoft|google|apple|ibm|intel|mitre|github)\./i.test(
+    /(?:reuters|apnews|bbc|theguardian|nytimes|economist|nature|science|arxiv|nasa|who|wikipedia|britannica|i
+nvestopedia|microsoft|google|apple|ibm|intel|mitre|github)\./i.test(
       h
     )
   )
@@ -1331,7 +1347,8 @@ function urlIntentScore(url, plan) {
   if (plan.type === 'doc' && isDoc(url)) x += 9;
   if (plan.type === 'video' && isVideo(url)) x += 8;
   if (plan.type === 'news' && /news|article|story|press|reuters|apnews|bbc/.test(s)) x += 5;
-  if (/(?:\/tag\/|\/tags\/|\/category\/|\/categories\/|\/search[/?]|\/author\/|\/authors\/|\/topic\/|\/topics\/|\/(?:home|homepage)\/?$)/i.test(s)) x -= 6;
+  if (/(?:\/tag\/|\/tags\/|\/category\/|\/categories\/|\/search[/?]|\/author\/|\/authors\/|\/topic\/|\/topics
+\/|\/(?:home|homepage)\/?$)/i.test(s)) x -= 6;
   return x;
 }
 
@@ -1369,7 +1386,8 @@ function genericPagePenalty(url, title) {
   const s = String(url || '').toLowerCase();
   const t = normalizeText(title);
   let p = 0;
-  if (/(?:^|\/)(?:tag|tags|category|categories|topic|topics|author|authors|search|results|archive|archives)(?:\/|\?|$)/i.test(s)) p += 10;
+  if (/(?:^|\/)(?:tag|tags|category|categories|topic|topics|author|authors|search|results|archive|archives)(?
+:\/|\?|$)/i.test(s)) p += 10;
   if (/(?:^|\/)(?:home|homepage|index)(?:\.[a-z0-9]+)?$/i.test(s) || s.endsWith('/')) p += 3;
   if (/^(?:home|homepage|welcome|search results|results|index|untitled)$/i.test(t)) p += 9;
   if (/\b(?:login|sign in|subscribe|contact us|privacy policy|terms of service)\b/i.test(t)) p += 8;
@@ -1548,7 +1566,8 @@ async function optionalGroqRerank(query, results, deadline) {
 
           {
                role: 'system',
-               content: 'Return JSON only. Reorder the supplied ids by relevance to the query. Never invent ids. Do not omit any id. Prefer exact topical match and direct source evidence.'
+               content: 'Return JSON only. Reorder the supplied ids by relevance to the query. Never invent ids.
+Do not omit any id. Prefer exact topical match and direct source evidence.'
             },
             {
                role: 'user',
@@ -1641,7 +1660,8 @@ function createPreCrawlCoordinator(logger, deadline, requestedCount = MAX_PRECRA
   function schedule(ranked) {
     if (!enabled) {
       if (!disabledLogged) {
-        logger.add('crawl-not-configured', 'Set ARIX_CRAWLER_URL to enable integrated Rust full-page extraction; results will remain search metadata only.');
+        logger.add('crawl-not-configured', 'Set ARIX_CRAWLER_URL to enable integrated Rust full-page
+extraction; results will remain search metadata only.');
         disabledLogged = true;
       }
       return;
@@ -1675,7 +1695,7 @@ MAX_PRECRAWL_PAGES));
        if (token) headers['x-arix-crawler-token'] = token;
        const response = await fetch(endpointUrl, {
          method: 'POST',
-         redirect: 'error',
+         redirect: 'manual',
          signal: controller.signal,
          headers,
          body: JSON.stringify({
@@ -1683,6 +1703,9 @@ MAX_PRECRAWL_PAGES));
             include_ai_context: true
          })
        });
+       if (response.status >= 300 && response.status < 400) {
+         throw new Error(`RUST_CRAWLER_REDIRECT_${response.status}`);
+       }
        if (!response.ok) throw new Error(`RUST_CRAWLER_HTTP_${response.status}`);
        const payload = await response.json();
        for (const page of Array.isArray(payload?.results) ? payload.results : []) {
@@ -1701,7 +1724,8 @@ MAX_PRECRAWL_PAGES));
        });
      } catch (error) {
 
-        logger.add('crawl-batch-failed', 'Rust extraction batch failed; undispatched/failing pages remain explicitly metadata-only.', {
+        logger.add('crawl-batch-failed', 'Rust extraction batch failed; undispatched/failing pages remain
+explicitly metadata-only.', {
           requested: candidates.length,
           error: error?.name === 'AbortError' ? 'CRAWL_TIMEOUT' : String(error?.message ||
 'CRAWL_FAILED').slice(0, 160)
@@ -1836,7 +1860,8 @@ function buildResponse(ctx) {
   const warnings = [];
   if (results.length < count) warnings.push(`${results.length} ranked sources were discovered. Public engines
 may return fewer results than requested.`);
-  if (!crawlInfo.enabled) warnings.push('ARIX_CRAWLER_URL is not configured; results contain search metadata only and no page content is claimed.');
+  if (!crawlInfo.enabled) warnings.push('ARIX_CRAWLER_URL is not configured; results contain search metadata
+only and no page content is claimed.');
   else if (extractedCount < Math.min(count, results.length)) warnings.push(`${extractedCount} of
 ${Math.min(count, results.length)} selected sources returned full-page content within the request budget.`);
   return {
@@ -1871,7 +1896,8 @@ ${Math.min(count, results.length)} selected sources returned full-page content w
         fullPageExtracted: extractedCount,
         requestedResults: count,
         realContentOnly: true,
-        contentGuarantee: 'pageContent and extractedText are populated only when the Rust crawler successfully fetched and extracted the page; search snippets remain separate.'
+        contentGuarantee: 'pageContent and extractedText are populated only when the Rust crawler successfully
+fetched and extracted the page; search snippets remain separate.'
      },
      searchPlan: {
         queryVariants: preciseQueries,
@@ -1888,7 +1914,8 @@ ${Math.min(count, results.length)} selected sources returned full-page content w
         commonCrawlPerformed: results.filter((result) => result.commonCrawl).length,
         streamed: true,
         logStreamSupported: true,
-        discoveryStrategy: 'fast-rss-and-research-apis-first; 350ms hedge; parallel incremental Rust pre-crawl',
+        discoveryStrategy: 'fast-rss-and-research-apis-first; 350ms hedge; parallel incremental Rust
+pre-crawl',
         deep,
         aiRequested
      },
@@ -1982,9 +2009,11 @@ async function performSearch(input, started, logger) {
   let standardPromise = Promise.resolve();
   if (strongEarly >= earlyThreshold) {
     fastController.abort();
-    logger.add('hedge-cutoff', 'Fast sources reached the count-aware early cutoff; cancelled outstanding fast requests and skipped slower HTML search engines.');
+    logger.add('hedge-cutoff', 'Fast sources reached the count-aware early cutoff; cancelled outstanding
+fast requests and skipped slower HTML search engines.');
   } else {
-    logger.add('hedge-open', 'Fast discovery did not reach the count-aware threshold; launching standard search engines in parallel.');
+    logger.add('hedge-open', 'Fast discovery did not reach the count-aware threshold; launching standard search
+engines in parallel.');
     const standardController = new AbortController();
     standardPromise = runGroup(hedgedRequests, discoveryDeadline, standardController);
   }
@@ -2007,7 +2036,8 @@ results: [], logger, started, deep, aiRequested, useCc, crawlInfo, discoveryLate
   }
 
   let ranked = fusionRank(discovered, plan);
-  logger.add('ranking-complete', 'Applied relevance, reciprocal-rank fusion, cross-engine agreement and URL-shape spam penalties.');
+  logger.add('ranking-complete', 'Applied relevance, reciprocal-rank fusion, cross-engine agreement and
+URL-shape spam penalties.');
   crawler.schedule(ranked);
 
   let groqUsed = false;
@@ -2093,7 +2123,8 @@ function streamJsonSearch(input) {
         };
 
       logger.add('request-start', `Starting live search for ${query}.`, { count, mode });
-      send(`{"ok":true,"version":${encode(VERSION)},"query":${encode(query)},"requestedResults":${count},"mode":${encode(mode)},"streaming":true,"results":[\n` + ' '.repeat(2048) + '\n');
+      send(`{"ok":true,"version":${encode(VERSION)},"query":${encode(query)},"requestedResults":${count},"mod
+e":${encode(mode)},"streaming":true,"results":[\n` + ' '.repeat(2048) + '\n');
       const heartbeat = setInterval(() => send(' \n'), 600);
       Promise.resolve()
         .then(() => performSearch(input, started, logger))
@@ -2118,7 +2149,8 @@ entries.length - 1 ? '' : ',\n'}`));
            send(
               `],"returnedResults":0,"generatedAt":${encode(nowIso())},"latencyMs":${Date.now() -
 started},"keylessCoreSearch":true,"groqUsed":false,"resultsError":${encode(error?.message ||
-'SEARCH_FAILED')},"liveLog":${JSON.stringify(logger.logs)},"warnings":[${encode('The crawler failed safely after the stream had already started.').slice(1, -1)}]}`
+'SEARCH_FAILED')},"liveLog":${JSON.stringify(logger.logs)},"warnings":[${encode('The crawler failed safely
+after the stream had already started.').slice(1, -1)}]}`
            );
            try {
               controller.close();
@@ -2214,10 +2246,12 @@ async function proxyCrawl(input) {
   const deploymentHost = env('VERCEL_PROJECT_PRODUCTION_URL') || env('VERCEL_URL');
   const endpoint = env('ARIX_CRAWLER_URL') || (deploymentHost ?
 `https://${deploymentHost.replace(/^https?:\/\//i, '')}/api/crawler` : '');
-  if (!endpoint) return jsonResponse({ ok: false, error: 'CRAWLER_ENDPOINT_NOT_CONFIGURED', message: 'Set ARIX_CRAWLER_URL or deploy this function on Vercel so it can resolve the Rust crawler route.' }, 503);
+  if (!endpoint) return jsonResponse({ ok: false, error: 'CRAWLER_ENDPOINT_NOT_CONFIGURED', message: 'Set
+ARIX_CRAWLER_URL or deploy this function on Vercel so it can resolve the Rust crawler route.' }, 503);
   const supplied = Array.isArray(input.urls) ? input.urls.map((value) => String(value ||
 '').trim()).filter(Boolean) : [];
-  if (!supplied.length) return jsonResponse({ ok: false, error: 'NO_URLS', message: 'Provide a non-empty urls array.' }, 400);
+  if (!supplied.length) return jsonResponse({ ok: false, error: 'NO_URLS', message: 'Provide a non-empty urls
+array.' }, 400);
   if (supplied.length > 60) return jsonResponse({ ok: false, error: 'TOO_MANY_URLS', message: 'Maximum 60 URLs per proxy request.' }, 413);
   const urls = unique(supplied);
   if (urls.some((url) => !safeUrl(url))) return jsonResponse({ ok: false, error: 'INVALID_URL', message:
@@ -2232,7 +2266,7 @@ async function proxyCrawl(input) {
 
     const upstream = await fetch(endpoint, {
       method: 'POST',
-      redirect: 'error',
+      redirect: 'manual',
       signal: controller.signal,
       headers,
       body: JSON.stringify({
@@ -2241,6 +2275,13 @@ async function proxyCrawl(input) {
         include_ai_context: input.include_ai_context !== false
       })
     });
+    if (upstream.status >= 300 && upstream.status < 400) {
+      return jsonResponse({
+        ok: false,
+        error: 'CRAWLER_REDIRECT',
+        message: `The configured Rust crawler endpoint returned HTTP ${upstream.status}. Set ARIX_CRAWLER_URL to the canonical HTTPS /api/crawler endpoint so the internal request does not redirect.`
+      }, 502);
+    }
     const body = await upstream.text();
     let payload;
     try { payload = JSON.parse(body); } catch { payload = { ok: false, error: { code:
@@ -2257,7 +2298,8 @@ async function proxyCrawl(input) {
 export default async function handler(req) {
   if (req.method === 'OPTIONS') return jsonResponse({ ok: true, version: VERSION });
   if (!['GET', 'POST'].includes(req.method)) {
-    return jsonResponse({ ok: false, version: VERSION, error: 'METHOD_NOT_ALLOWED', message: 'Use GET or POST.' }, 405);
+    return jsonResponse({ ok: false, version: VERSION, error: 'METHOD_NOT_ALLOWED', message: 'Use GET or
+POST.' }, 405);
   }
   try {
     const input = await readInput(req);
